@@ -360,27 +360,82 @@ Vibe is configured via a `config.toml` file. It looks for this file first in `./
 
 ### API Key Configuration
 
-To use Vibe, you'll need a Mistral API key. You can obtain one by signing up at [https://console.mistral.ai](https://console.mistral.ai).
+To use Vibe, you'll need API keys for whichever provider you configured.
+Vibe can run with multiple providers at once and route requests by model alias.
+You can obtain keys from the provider consoles.
 
 You can configure your API key using `vibe --setup`, or through one of the methods below.
 
-Vibe supports multiple ways to configure your API keys:
+Common setup:
 
 1. **Interactive Setup (Recommended for first-time users)**: When you run Vibe for the first time or if your API key is missing, Vibe will prompt you to enter it. The key will be securely saved to `~/.vibe/.env` for future sessions.
 
-2. **Environment Variables**: Set your API key as an environment variable:
+2. **Environment Variables**: Set your provider API keys as environment variables:
 
-   ```bash
-   export MISTRAL_API_KEY="your_mistral_api_key"
-   ```
+    ```bash
+    export MISTRAL_API_KEY="your_mistral_api_key"
+    export OPENAI_API_KEY="your_openai_api_key"
+    export ZAI_API_KEY="your_zai_api_key"
+    ```
 
 3. **`.env` File**: Create a `.env` file in `~/.vibe/` and add your API keys:
 
-   ```bash
-   MISTRAL_API_KEY=your_mistral_api_key
-   ```
+    ```bash
+    MISTRAL_API_KEY=your_mistral_api_key
+    OPENAI_API_KEY=your_openai_api_key
+    ZAI_API_KEY=your_zai_api_key
+    ```
 
-   Vibe automatically loads API keys from `~/.vibe/.env` on startup. Environment variables take precedence over the `.env` file if both are set.
+    Vibe automatically loads keys from `~/.vibe/.env` on startup. Environment variables take precedence over the `.env` file if both are set.
+
+### Multi-Provider Configuration
+
+Providers and model aliases are configured in your `config.toml`.
+
+Example:
+
+```toml
+active_model = "openai-mini"
+
+[[providers]]
+name = "mistral"
+api_base = "https://api.mistral.ai/v1"
+api_key_env_var = "MISTRAL_API_KEY"
+backend = "mistral"
+
+[[providers]]
+name = "openai"
+api_base = "https://api.openai.com/v1"
+api_key_env_var = "OPENAI_API_KEY"
+backend = "generic"
+
+[[providers]]
+name = "zai"
+api_base = "https://api.z.ai/api/paas/v4"
+api_key_env_var = "ZAI_API_KEY"
+backend = "generic"
+
+[[models]]
+name = "gpt-4o-mini"
+provider = "openai"
+alias = "openai-mini"
+input_price = 2.0
+output_price = 6.0
+
+[[models]]
+name = "glm-4.5"
+provider = "zai"
+alias = "zai-glm-45"
+input_price = 2.0
+output_price = 4.0
+
+[[models]]
+name = "devstral-vibe-cli-latest"
+provider = "mistral"
+alias = "devstral-2"
+```
+
+Set `active_model` to the alias you want Vibe to use by default.
 
 **Note**: The `.env` file is specifically for API keys and other provider credentials. General Vibe configuration should be done in `config.toml`.
 

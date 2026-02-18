@@ -41,6 +41,9 @@ from vibe.core.types import LLMChunk, LLMMessage, Role, ToolCall
 from vibe.core.utils import get_user_agent
 
 
+OPENAI_COMPATIBLE_BASE_URLS = ("https://api.openai.com", "https://api.z.ai")
+
+
 class TestBackend:
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
@@ -50,6 +53,16 @@ class TestBackend:
             *FIREWORKS_TOOL_CONVERSATION_PARAMS,
             *MISTRAL_SIMPLE_CONVERSATION_PARAMS,
             *MISTRAL_TOOL_CONVERSATION_PARAMS,
+            *[
+                (base_url, entry[1], entry[2])
+                for base_url in OPENAI_COMPATIBLE_BASE_URLS
+                for entry in FIREWORKS_SIMPLE_CONVERSATION_PARAMS
+            ],
+            *[
+                (base_url, entry[1], entry[2])
+                for base_url in OPENAI_COMPATIBLE_BASE_URLS
+                for entry in FIREWORKS_TOOL_CONVERSATION_PARAMS
+            ],
         ],
     )
     async def test_backend_complete(
@@ -111,6 +124,53 @@ class TestBackend:
                     assert tool_call.index == result_data["tool_calls"][i]["index"]
 
     @pytest.mark.asyncio
+    async def test_backend_complete_with_zai_api_base_path(self) -> None:
+        with respx.mock(base_url="https://api.z.ai") as mock_api:
+            route = mock_api.post("/api/paas/v4/chat/completions").mock(
+                return_value=httpx.Response(
+                    status_code=200,
+                    json={
+                        "id": "chatcmpl-zai",
+                        "object": "chat.completion",
+                        "created": 1730000000,
+                        "model": "glm-4.5",
+                        "choices": [
+                            {
+                                "index": 0,
+                                "finish_reason": "stop",
+                                "message": {"role": "assistant", "content": "hi"},
+                            }
+                        ],
+                        "usage": {"prompt_tokens": 5, "completion_tokens": 1},
+                    },
+                )
+            )
+            provider = ProviderConfig(
+                name="zai",
+                api_base="https://api.z.ai/api/paas/v4",
+                api_key_env_var="ZAI_API_KEY",
+            )
+            backend = GenericBackend(provider=provider)
+            model = ModelConfig(name="glm-4.5", provider="zai", alias="zai-glm-45")
+            messages = [LLMMessage(role=Role.user, content="Just say hi")]
+
+            result = await backend.complete(
+                model=model,
+                messages=messages,
+                temperature=0.2,
+                tools=None,
+                max_tokens=None,
+                tool_choice=None,
+                extra_headers=None,
+            )
+
+            assert route.called
+            assert result.message.content == "hi"
+            assert result.usage is not None
+            assert result.usage.prompt_tokens == 5
+            assert result.usage.completion_tokens == 1
+
+    @pytest.mark.asyncio
     @pytest.mark.parametrize(
         "base_url,chunks,result_data",
         [
@@ -118,6 +178,16 @@ class TestBackend:
             *FIREWORKS_STREAMED_TOOL_CONVERSATION_PARAMS,
             *MISTRAL_STREAMED_SIMPLE_CONVERSATION_PARAMS,
             *MISTRAL_STREAMED_TOOL_CONVERSATION_PARAMS,
+            *[
+                (base_url, entry[1], entry[2])
+                for base_url in OPENAI_COMPATIBLE_BASE_URLS
+                for entry in FIREWORKS_STREAMED_SIMPLE_CONVERSATION_PARAMS
+            ],
+            *[
+                (base_url, entry[1], entry[2])
+                for base_url in OPENAI_COMPATIBLE_BASE_URLS
+                for entry in FIREWORKS_STREAMED_TOOL_CONVERSATION_PARAMS
+            ],
         ],
     )
     async def test_backend_complete_streaming(
@@ -214,6 +284,14 @@ class TestBackend:
                 MistralBackend,
                 httpx.Response(status_code=429, text="Rate Limit Exceeded"),
             ),
+            *[
+                (base_url, GenericBackend, httpx.Response(status_code=500, text="Internal Server Error"))
+                for base_url in OPENAI_COMPATIBLE_BASE_URLS
+            ],
+            *[
+                (base_url, GenericBackend, httpx.Response(status_code=429, text="Rate Limit Exceeded"))
+                for base_url in OPENAI_COMPATIBLE_BASE_URLS
+            ],
         ],
     )
     async def test_backend_complete_streaming_error(
@@ -259,6 +337,8 @@ class TestBackend:
                 "mistral",
                 {"include_usage": True, "stream_tool_calls": True},
             ),
+            ("https://api.openai.com", "openai", {"include_usage": True}),
+            ("https://api.z.ai", "zai", {"include_usage": True}),
         ],
     )
     async def test_backend_streaming_payload_includes_stream_options(

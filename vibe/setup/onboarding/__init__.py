@@ -33,7 +33,12 @@ def run_onboarding(app: App | None = None) -> None:
                 "\n[dim]The API key is set for this session only. "
                 f"You may need to set it manually in {GLOBAL_ENV_FILE.path}[/]\n"
             )
+        case "unsupported_provider":
+            rprint(
+                "\n[red]Setup could not save your key: selected provider has no API key"
+                " environment variable. Set one in your config and retry."
+            )
         case "completed":
             rprint(
-                '\nSetup complete 🎉. Run "vibe" to start using the Mistral Vibe CLI.\n'
+                '\nSetup complete 🎉. Run "vibe" to start using Vibe.\n'
             )

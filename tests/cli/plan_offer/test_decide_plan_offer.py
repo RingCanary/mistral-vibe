@@ -153,6 +153,7 @@ def test_resolve_api_key_for_plan_with_mistral_backend(
 def test_resolve_api_key_for_plan_with_non_mistral_backend(
     mistral_api_key_env: str,
 ) -> None:
+    _ = mistral_api_key_env
     provider = ProviderConfig(
         name="test_generic",
         api_base="https://api.generic.ai",
@@ -161,12 +162,61 @@ def test_resolve_api_key_for_plan_with_non_mistral_backend(
     )
 
     result = resolve_api_key_for_plan(provider)
-    assert result == mistral_api_key_env
+    assert result is None
+
+
+def test_resolve_api_key_for_plan_with_openai_backend(
+    mistral_api_key_env: str,
+) -> None:
+    _ = mistral_api_key_env
+    original_openai_key = environ.get("OPENAI_API_KEY")
+    expected_openai_key = "openai-api-key"
+    environ["OPENAI_API_KEY"] = expected_openai_key
+
+    provider = ProviderConfig(
+        name="test_openai",
+        api_base="https://api.openai.com",
+        backend=Backend.GENERIC,
+        api_key_env_var="OPENAI_API_KEY",
+    )
+
+    result = resolve_api_key_for_plan(provider)
+    assert result is None
+
+    if original_openai_key is not None:
+        environ["OPENAI_API_KEY"] = original_openai_key
+    else:
+        del environ["OPENAI_API_KEY"]
+
+
+def test_resolve_api_key_for_plan_with_zai_backend(
+    mistral_api_key_env: str,
+) -> None:
+    _ = mistral_api_key_env
+    original_zai_key = environ.get("ZAI_API_KEY")
+    expected_zai_key = "zai-api-key"
+    environ["ZAI_API_KEY"] = expected_zai_key
+
+    provider = ProviderConfig(
+        name="test_zai",
+        api_base="https://api.z.ai",
+        backend=Backend.GENERIC,
+        api_key_env_var="ZAI_API_KEY",
+    )
+
+    result = resolve_api_key_for_plan(provider)
+    assert result is None
+
+    if original_zai_key is not None:
+        environ["ZAI_API_KEY"] = original_zai_key
+    else:
+        del environ["ZAI_API_KEY"]
 
 
 def test_resolve_api_key_for_plan_with_missing_env_var() -> None:
-    previous_api_key = environ["MISTRAL_API_KEY"]
-    del environ["MISTRAL_API_KEY"]
+    previous_api_key = environ.get("MISTRAL_API_KEY")
+    if previous_api_key is not None:
+        del environ["MISTRAL_API_KEY"]
 
     provider = ProviderConfig(
         name="test_mistral",

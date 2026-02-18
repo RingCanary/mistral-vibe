@@ -13,13 +13,21 @@ from textual.widgets import Input, Link, Static
 
 from vibe.cli.clipboard import copy_selection_to_clipboard
 from vibe.cli.textual_ui.widgets.no_markup_static import NoMarkupStatic
-from vibe.core.config import Backend, VibeConfig
+from vibe.core.config import (
+    DEFAULT_PROVIDERS,
+    Backend,
+    MissingAPIKeyError,
+    ProviderConfig,
+    VibeConfig,
+)
 from vibe.core.paths.global_paths import GLOBAL_ENV_FILE
 from vibe.core.telemetry.send import TelemetryClient
 from vibe.setup.onboarding.base import OnboardingScreen
 
 PROVIDER_HELP = {
-    "mistral": ("https://console.mistral.ai/codestral/cli", "Mistral AI Studio")
+    "mistral": ("https://console.mistral.ai/codestral/cli", "Mistral AI Studio"),
+    "openai": ("https://platform.openai.com/api-keys", "OpenAI API Keys"),
+    "zai": ("https://docs.z.ai/reference/authentication", "Z.AI API credentials"),
 }
 CONFIG_DOCS_URL = (
     "https://github.com/mistralai/mistral-vibe?tab=readme-ov-file#configuration"
@@ -39,24 +47,52 @@ class ApiKeyScreen(OnboardingScreen):
 
     NEXT_SCREEN = None
 
+    @staticmethod
+    def _provider_for_missing_api_key(error: MissingAPIKeyError) -> ProviderConfig:
+        for provider in DEFAULT_PROVIDERS:
+            if provider.name == error.provider_name:
+                return provider.model_copy(update={"api_key_env_var": error.env_key})
+
+        return ProviderConfig(
+            name=error.provider_name,
+            api_base="",
+            api_key_env_var=error.env_key,
+            backend=Backend.GENERIC,
+        )
+
     def __init__(self) -> None:
         super().__init__()
-        config = VibeConfig.model_construct()
-        active_model = config.get_active_model()
-        self.provider = config.get_provider_for_model(active_model)
+        try:
+            config = VibeConfig.load()
+            active_model = config.get_active_model()
+            self.provider = config.get_provider_for_model(active_model)
+        except MissingAPIKeyError as error:
+            self.provider = self._provider_for_missing_api_key(error)
 
     def _compose_provider_link(self, provider_name: str) -> ComposeResult:
-        if self.provider.name not in PROVIDER_HELP:
+        api_key_env_var = self.provider.api_key_env_var
+        if not api_key_env_var:
+            yield NoMarkupStatic(
+                "The selected provider does not define an API key environment variable."
+            )
             return
 
-        help_url, help_name = PROVIDER_HELP[self.provider.name]
-        yield NoMarkupStatic(f"Grab your {provider_name} API key from the {help_name}:")
-        yield Center(
-            Horizontal(
-                NoMarkupStatic("→ ", classes="link-chevron"),
-                Link(help_url, url=help_url),
-                classes="link-row",
+        if self.provider.name in PROVIDER_HELP:
+            help_url, help_name = PROVIDER_HELP[self.provider.name]
+            yield NoMarkupStatic(
+                f"Grab your {provider_name} API key from the {help_name}:"
             )
+            yield Center(
+                Horizontal(
+                    NoMarkupStatic("→ ", classes="link-chevron"),
+                    Link(help_url, url=help_url),
+                    classes="link-row",
+                )
+            )
+            return
+
+        yield NoMarkupStatic(
+            f"Set your {provider_name} API key in the `{api_key_env_var}` environment variable."
         )
 
     def _compose_config_docs(self) -> ComposeResult:
@@ -124,6 +160,10 @@ class ApiKeyScreen(OnboardingScreen):
 
     def _save_and_finish(self, api_key: str) -> None:
         env_key = self.provider.api_key_env_var
+        if not env_key:
+            self.app.exit("unsupported_provider")
+            return
+
         os.environ[env_key] = api_key
         try:
             _save_api_key_to_env_file(env_key, api_key)

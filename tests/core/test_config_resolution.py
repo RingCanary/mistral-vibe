@@ -6,6 +6,7 @@ import pytest
 
 from vibe.core.paths.config_paths import CONFIG_FILE
 from vibe.core.paths.global_paths import GLOBAL_CONFIG_FILE, VIBE_HOME
+from vibe.core.config import Backend, ModelConfig, ProviderConfig, VibeConfig
 from vibe.core.trusted_folders import trusted_folders_manager
 
 
@@ -51,3 +52,59 @@ class TestResolveConfigFile:
         assert VIBE_HOME.path != tmp_path
         monkeypatch.setenv("VIBE_HOME", str(tmp_path))
         assert VIBE_HOME.path == tmp_path
+
+
+@pytest.mark.parametrize(
+    "active_alias,provider_name,provider_api_key_env_var",
+    [
+        ("openai-alias", "openai", "OPENAI_API_KEY"),
+        ("zai-alias", "zai", "ZAI_API_KEY"),
+    ],
+)
+def test_get_active_model_and_provider_for_openai_and_zai(
+    active_alias: str,
+    provider_name: str,
+    provider_api_key_env_var: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "openai-test-key")
+    monkeypatch.setenv("ZAI_API_KEY", "zai-test-key")
+
+    config = VibeConfig(
+        active_model=active_alias,
+        providers=[
+            ProviderConfig(
+                name="openai",
+                api_base="https://api.openai.com/v1",
+                backend=Backend.GENERIC,
+                api_key_env_var="OPENAI_API_KEY",
+            ),
+            ProviderConfig(
+                name="zai",
+                api_base="https://api.z.ai/api/paas/v4",
+                backend=Backend.GENERIC,
+                api_key_env_var="ZAI_API_KEY",
+            ),
+        ],
+        models=[
+            ModelConfig(
+                name="gpt-4o",
+                provider="openai",
+                alias="openai-alias",
+            ),
+            ModelConfig(
+                name="zai-model",
+                provider="zai",
+                alias="zai-alias",
+            ),
+        ],
+        enable_auto_update=False,
+    )
+
+    active_model = config.get_active_model()
+    provider = config.get_provider_for_model(active_model)
+
+    assert active_model.alias == active_alias
+    assert provider.name == provider_name
+    assert provider.api_key_env_var == provider_api_key_env_var
+    assert provider.backend == Backend.GENERIC

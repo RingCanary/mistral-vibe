@@ -33,11 +33,11 @@ class TelemetryClient:
         except ValueError:
             return get_user_agent(None)
 
-    def _get_mistral_api_key(self) -> str | None:
-        """Get the current API key from the active provider.
+    def _get_telemetry_api_key(self) -> str | None:
+        """Get the API key to use for telemetry requests.
 
-        Only returns an API key if the provider is a Mistral provider
-        to avoid leaking third-party credentials to the telemetry endpoint.
+        Only Mistral backend credentials are accepted to avoid leaking
+        third-party provider credentials to the telemetry endpoint.
         """
         try:
             config = self._config_getter()
@@ -49,6 +49,10 @@ class TelemetryClient:
             return os.getenv(env_var) if env_var else None
         except ValueError:
             return None
+
+    def _get_mistral_api_key(self) -> str | None:
+        """Backward-compatible alias used by older tests/paths."""
+        return self._get_telemetry_api_key()
 
     def _is_enabled(self) -> bool:
         """Check if telemetry is enabled in the current config."""
@@ -67,8 +71,8 @@ class TelemetryClient:
         return self._client
 
     def send_telemetry_event(self, event_name: str, properties: dict[str, Any]) -> None:
-        mistral_api_key = self._get_mistral_api_key()
-        if mistral_api_key is None or not self._is_enabled():
+        telemetry_api_key = self._get_telemetry_api_key()
+        if telemetry_api_key is None or not self._is_enabled():
             return
         user_agent = self._get_telemetry_user_agent()
 
@@ -79,7 +83,7 @@ class TelemetryClient:
                     json={"event": event_name, "properties": properties},
                     headers={
                         "Content-Type": "application/json",
-                        "Authorization": f"Bearer {mistral_api_key}",
+                        "Authorization": f"Bearer {telemetry_api_key}",
                         "User-Agent": user_agent,
                     },
                 )

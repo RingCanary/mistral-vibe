@@ -10,7 +10,7 @@ from vibe.cli.plan_offer.ports.whoami_gateway import (
     WhoAmIGatewayUnauthorized,
     WhoAmIResponse,
 )
-from vibe.core.config import DEFAULT_MISTRAL_API_ENV_KEY, Backend, ProviderConfig
+from vibe.core.config import Backend, ProviderConfig
 
 logger = logging.getLogger(__name__)
 
@@ -67,12 +67,11 @@ def _action_and_plan_from_response(
 
 
 def resolve_api_key_for_plan(provider: ProviderConfig) -> str | None:
-    api_env_key = DEFAULT_MISTRAL_API_ENV_KEY
-
-    if provider.backend == Backend.MISTRAL:
-        api_env_key = provider.api_key_env_var
-
-    return getenv(api_env_key)
+    if provider.backend != Backend.MISTRAL:
+        return None
+    if not provider.api_key_env_var:
+        return None
+    return getenv(provider.api_key_env_var)
 
 
 def plan_offer_cta(action: PlanOfferAction) -> str | None:

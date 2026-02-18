@@ -49,6 +49,18 @@ def test_warns_on_save_error(
     assert "disk full" in out
 
 
+def test_reports_unsupported_provider(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: Path
+) -> None:
+    monkeypatch.setattr(sys, "exit", _exit_raiser)
+
+    onboarding.run_onboarding(StubApp("unsupported_provider"))
+
+    out = capsys.readouterr().out
+    assert "Setup could not save your key" in out
+    assert "has no API key environment" in out
+
+
 def test_successfully_completes(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: Path
 ) -> None:
@@ -57,4 +69,4 @@ def test_successfully_completes(
     onboarding.run_onboarding(StubApp("completed"))
 
     out = capsys.readouterr().out
-    assert 'Setup complete 🎉. Run "vibe" to start using the Mistral Vibe CLI.' in out
+    assert 'Setup complete 🎉. Run "vibe" to start using Vibe.' in out

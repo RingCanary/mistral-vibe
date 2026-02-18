@@ -9,7 +9,7 @@ import pytest
 from tests.conftest import build_test_vibe_config
 from tests.stubs.fake_tool import FakeTool, FakeToolArgs
 from vibe.core.agent_loop import ToolDecision, ToolExecutionResponse
-from vibe.core.config import Backend
+from vibe.core.config import Backend, ModelConfig, ProviderConfig
 from vibe.core.llm.format import ResolvedToolCall
 from vibe.core.telemetry.send import DATALAKE_EVENTS_URL, TelemetryClient
 from vibe.core.tools.base import BaseTool, ToolPermission
@@ -53,7 +53,35 @@ class TestTelemetryClient:
         ).api_key_env_var
         monkeypatch.delenv(env_key, raising=False)
         client = TelemetryClient(config_getter=lambda: config)
-        assert client._get_mistral_api_key() is None
+        assert client._get_telemetry_api_key() is None
+        client._client = MagicMock()
+        client._client.post = AsyncMock()
+
+        client.send_telemetry_event("vibe/test", {})
+        _run_telemetry_tasks()
+
+        client._client.post.assert_not_called()
+
+    def test_send_telemetry_event_skips_non_mistral_provider(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-openai")
+        config = build_test_vibe_config(
+            active_model="openai-mini",
+            providers=[
+                ProviderConfig(
+                    name="openai",
+                    api_base="https://api.openai.com/v1",
+                    api_key_env_var="OPENAI_API_KEY",
+                )
+            ],
+            models=[
+                ModelConfig(name="gpt-4o-mini", provider="openai", alias="openai-mini")
+            ],
+        )
+
+        client = TelemetryClient(config_getter=lambda: config)
+        assert client._get_telemetry_api_key() is None
         client._client = MagicMock()
         client._client.post = AsyncMock()
 

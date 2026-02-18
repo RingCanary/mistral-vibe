@@ -72,13 +72,13 @@ class MissingPromptFileError(RuntimeError):
 
 
 class WrongBackendError(RuntimeError):
-    def __init__(self, backend: Backend, is_mistral_api: bool) -> None:
+    def __init__(self, backend: Backend, expected_backend: Backend) -> None:
         super().__init__(
-            f"Wrong backend '{backend}' for {'' if is_mistral_api else 'non-'}"
-            f"mistral API. Use '{Backend.MISTRAL}' for mistral API and '{Backend.GENERIC}' for others."
+            f"Invalid backend '{backend}' for configured provider API base. "
+            f"Expected '{expected_backend}'."
         )
         self.backend = backend
-        self.is_mistral_api = is_mistral_api
+        self.expected_backend = expected_backend
 
 
 class TomlFileSettingsSource(PydanticBaseSettingsSource):
@@ -150,6 +150,17 @@ class ProviderConfig(BaseModel):
     reasoning_field_name: str = "reasoning_content"
     project_id: str = ""
     region: str = ""
+
+
+MISTRAL_API_BASE_PREFIXES = (
+    "https://codestral.mistral.ai",
+    "https://api.mistral.ai",
+)
+
+
+def _is_mistral_api_base(api_base: str) -> bool:
+    normalized = (api_base or "").rstrip("/")
+    return any(normalized.startswith(prefix) for prefix in MISTRAL_API_BASE_PREFIXES)
 
 
 class _MCPBase(BaseModel):
@@ -275,6 +286,16 @@ DEFAULT_PROVIDERS = [
         backend=Backend.MISTRAL,
     ),
     ProviderConfig(
+        name="openai",
+        api_base="https://api.openai.com/v1",
+        api_key_env_var="OPENAI_API_KEY",
+    ),
+    ProviderConfig(
+        name="zai",
+        api_base="https://api.z.ai/api/paas/v4",
+        api_key_env_var="ZAI_API_KEY",
+    ),
+    ProviderConfig(
         name="llamacpp",
         api_base="http://127.0.0.1:8080/v1",
         api_key_env_var="",  # NOTE: if you wish to use --api-key in llama-server, change this value
@@ -295,6 +316,16 @@ DEFAULT_MODELS = [
         alias="devstral-small",
         input_price=0.1,
         output_price=0.3,
+    ),
+    ModelConfig(
+        name="gpt-4o-mini",
+        provider="openai",
+        alias="openai-mini",
+    ),
+    ModelConfig(
+        name="glm-4.5",
+        provider="zai",
+        alias="zai-glm-45",
     ),
     ModelConfig(
         name="devstral",
@@ -496,17 +527,13 @@ class VibeConfig(BaseSettings):
         try:
             active_model = self.get_active_model()
             provider = self.get_provider_for_model(active_model)
-            MISTRAL_API_BASES = [
-                "https://codestral.mistral.ai",
-                "https://api.mistral.ai",
-            ]
-            is_mistral_api = any(
-                provider.api_base.startswith(api_base) for api_base in MISTRAL_API_BASES
+            expected_backend = (
+                Backend.MISTRAL
+                if _is_mistral_api_base(provider.api_base)
+                else Backend.GENERIC
             )
-            if (is_mistral_api and provider.backend != Backend.MISTRAL) or (
-                not is_mistral_api and provider.backend != Backend.GENERIC
-            ):
-                raise WrongBackendError(provider.backend, is_mistral_api)
+            if provider.backend != expected_backend:
+                raise WrongBackendError(provider.backend, expected_backend)
 
         except ValueError:
             pass
