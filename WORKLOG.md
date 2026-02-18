@@ -35,3 +35,4 @@ Timestamp convention for new entries (henceforth): prefix each task with `[epoch
 - [epoch:1771383300] Installing global basedpyright language server for OpenCode PATH, then running diagnostics/verification and committing the multi-provider integration.
 - [epoch:1771383600] Post-restart verification: confirming LSP availability, rerunning checks, then finalizing and committing multi-provider + basedpyright changes.
 - [epoch:1771384000] Switched back to default OpenCode workflow: removing basedpyright-specific setup and restoring pyright-first tooling path before final checks/commit.
+- [epoch:1771384300] Verified pyright default toolchain, reran pyright + focused provider/onboarding tests (69 passed), and committed multi-provider support changes.
