@@ -36,3 +36,7 @@ Timestamp convention for new entries (henceforth): prefix each task with `[epoch
 - [epoch:1771383600] Post-restart verification: confirming LSP availability, rerunning checks, then finalizing and committing multi-provider + basedpyright changes.
 - [epoch:1771384000] Switched back to default OpenCode workflow: removing basedpyright-specific setup and restoring pyright-first tooling path before final checks/commit.
 - [epoch:1771384300] Verified pyright default toolchain, reran pyright + focused provider/onboarding tests (69 passed), and committed multi-provider support changes.
+- [epoch:1771385000] Updated local `~/.vibe/config.toml` for multi-provider smoke testing (Mistral/OpenAI/ZAI) with ZAI model set to `glm-5`.
+- [epoch:1771385600] Investigating runtime ZAI rate-limit failure in Vibe after key setup; running recon and targeted reproduction to isolate request-path/model/config cause.
+- [epoch:1771386200] Confirmed ZAI key works after switching to the correct endpoint type; updating README troubleshooting notes for standard vs coding endpoint mismatch.
+- [epoch:1771387000] User acceptance pass: committing README/worklog updates, then running non-interactive `uv run vibe` in debug mode to check runtime behavior consistency.

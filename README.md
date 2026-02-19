@@ -388,6 +388,13 @@ Common setup:
 
     Vibe automatically loads keys from `~/.vibe/.env` on startup. Environment variables take precedence over the `.env` file if both are set.
 
+> [!WARNING]
+> ZAI has separate endpoints for standard API access and Coding Plan access.
+> - Standard key endpoint: `https://api.z.ai/api/paas/v4`
+> - Coding Plan key endpoint: `https://api.z.ai/api/coding/paas/v4`
+>
+> If the key type and endpoint do not match, requests can fail with rate-limit/auth errors (for example 429).
+
 ### Multi-Provider Configuration
 
 Providers and model aliases are configured in your `config.toml`.
@@ -433,6 +440,16 @@ output_price = 4.0
 name = "devstral-vibe-cli-latest"
 provider = "mistral"
 alias = "devstral-2"
+```
+
+If you use a ZAI Coding Plan key, update the ZAI provider endpoint:
+
+```toml
+[[providers]]
+name = "zai"
+api_base = "https://api.z.ai/api/coding/paas/v4"
+api_key_env_var = "ZAI_API_KEY"
+backend = "generic"
 ```
 
 Set `active_model` to the alias you want Vibe to use by default.
