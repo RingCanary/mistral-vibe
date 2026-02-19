@@ -28,6 +28,7 @@ def _get_vibe_home() -> Path:
 VIBE_HOME = GlobalPath(_get_vibe_home)
 GLOBAL_CONFIG_FILE = GlobalPath(lambda: VIBE_HOME.path / "config.toml")
 GLOBAL_ENV_FILE = GlobalPath(lambda: VIBE_HOME.path / ".env")
+GLOBAL_AUTH_DIR = GlobalPath(lambda: VIBE_HOME.path / "auth")
 GLOBAL_TOOLS_DIR = GlobalPath(lambda: VIBE_HOME.path / "tools")
 GLOBAL_SKILLS_DIR = GlobalPath(lambda: VIBE_HOME.path / "skills")
 GLOBAL_AGENTS_DIR = GlobalPath(lambda: VIBE_HOME.path / "agents")

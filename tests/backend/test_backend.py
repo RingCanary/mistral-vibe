@@ -31,7 +31,15 @@ from tests.backend.data.mistral import (
     STREAMED_TOOL_CONVERSATION_PARAMS as MISTRAL_STREAMED_TOOL_CONVERSATION_PARAMS,
     TOOL_CONVERSATION_PARAMS as MISTRAL_TOOL_CONVERSATION_PARAMS,
 )
-from vibe.core.config import Backend, ModelConfig, ProviderConfig
+from vibe.core.auth.oauth import ResolvedProviderAuth
+from vibe.core.config import (
+    Backend,
+    ModelConfig,
+    OAuthConfig,
+    ProviderAuthConfig,
+    ProviderAuthType,
+    ProviderConfig,
+)
 from vibe.core.llm.backend.factory import BACKEND_FACTORY
 from vibe.core.llm.backend.generic import GenericBackend
 from vibe.core.llm.backend.mistral import MistralBackend
@@ -42,6 +50,38 @@ from vibe.core.utils import get_user_agent
 
 
 OPENAI_COMPATIBLE_BASE_URLS = ("https://api.openai.com", "https://api.z.ai")
+
+
+class StaticAuthResolver:
+    def __init__(
+        self,
+        *,
+        initial_token: str,
+        refreshed_token: str | None = None,
+        account_id: str = "",
+    ) -> None:
+        self._initial_token = initial_token
+        self._refreshed_token = refreshed_token
+        self._account_id = account_id
+        self.force_refresh_calls = 0
+
+    async def resolve(self, provider: ProviderConfig) -> ResolvedProviderAuth:
+        _ = provider
+        headers = {"ChatGPT-Account-Id": self._account_id} if self._account_id else {}
+        return ResolvedProviderAuth(
+            token=self._initial_token,
+            extra_headers=headers,
+            auth_type=ProviderAuthType.OAUTH,
+        )
+
+    async def force_refresh(self, provider: ProviderConfig) -> ResolvedProviderAuth:
+        _ = provider
+        self.force_refresh_calls += 1
+        return ResolvedProviderAuth(
+            token=self._refreshed_token or self._initial_token,
+            extra_headers={},
+            auth_type=ProviderAuthType.OAUTH,
+        )
 
 
 class TestBackend:
@@ -476,3 +516,102 @@ class TestBackend:
                 pass
 
             assert mock_api.calls.last.request.headers["user-agent"] == user_agent
+
+    @pytest.mark.asyncio
+    async def test_generic_backend_uses_oauth_headers(self) -> None:
+        with respx.mock(base_url="https://api.openai.com") as mock_api:
+            route = mock_api.post("/v1/chat/completions").mock(
+                return_value=httpx.Response(
+                    status_code=200,
+                    json={
+                        "choices": [{"message": {"role": "assistant", "content": "ok"}}],
+                        "usage": {"prompt_tokens": 2, "completion_tokens": 1},
+                    },
+                )
+            )
+
+            provider = ProviderConfig(
+                name="openai",
+                api_base="https://api.openai.com/v1",
+                api_key_env_var="",
+                auth=ProviderAuthConfig(
+                    type=ProviderAuthType.OAUTH,
+                    oauth=OAuthConfig(account_header_name="ChatGPT-Account-Id"),
+                ),
+            )
+            resolver = StaticAuthResolver(
+                initial_token="oauth-access-token",
+                account_id="account-123",
+            )
+            backend = GenericBackend(provider=provider, auth_resolver=resolver)
+            model = ModelConfig(name="gpt-4o-mini", provider="openai", alias="openai")
+
+            result = await backend.complete(
+                model=model,
+                messages=[LLMMessage(role=Role.user, content="hello")],
+                temperature=0.2,
+                tools=None,
+                max_tokens=None,
+                tool_choice=None,
+                extra_headers=None,
+            )
+
+            assert result.message.content == "ok"
+            assert route.called
+            assert route.calls.last.request.headers["authorization"] == "Bearer oauth-access-token"
+            assert route.calls.last.request.headers["chatgpt-account-id"] == "account-123"
+
+    @pytest.mark.asyncio
+    async def test_generic_backend_refreshes_oauth_on_401(self) -> None:
+        with respx.mock(base_url="https://api.openai.com") as mock_api:
+            route = mock_api.post("/v1/chat/completions").mock(
+                side_effect=[
+                    httpx.Response(status_code=401, json={"error": "expired"}),
+                    httpx.Response(
+                        status_code=200,
+                        json={
+                            "choices": [
+                                {
+                                    "message": {
+                                        "role": "assistant",
+                                        "content": "refreshed",
+                                    }
+                                }
+                            ],
+                            "usage": {"prompt_tokens": 2, "completion_tokens": 1},
+                        },
+                    ),
+                ]
+            )
+
+            provider = ProviderConfig(
+                name="openai",
+                api_base="https://api.openai.com/v1",
+                api_key_env_var="",
+                auth=ProviderAuthConfig(
+                    type=ProviderAuthType.OAUTH,
+                    oauth=OAuthConfig(token_endpoint="https://auth0.openai.com/oauth/token"),
+                ),
+            )
+            resolver = StaticAuthResolver(
+                initial_token="expired-access-token",
+                refreshed_token="fresh-access-token",
+            )
+            backend = GenericBackend(provider=provider, auth_resolver=resolver)
+            model = ModelConfig(name="gpt-4o-mini", provider="openai", alias="openai")
+
+            result = await backend.complete(
+                model=model,
+                messages=[LLMMessage(role=Role.user, content="hello")],
+                temperature=0.2,
+                tools=None,
+                max_tokens=None,
+                tool_choice=None,
+                extra_headers=None,
+            )
+
+            assert result.message.content == "refreshed"
+            assert resolver.force_refresh_calls == 1
+            assert len(route.calls) == 2
+            assert route.calls[0].request.headers["authorization"] == "Bearer expired-access-token"
+            assert route.calls[1].request.headers["authorization"] == "Bearer fresh-access-token"

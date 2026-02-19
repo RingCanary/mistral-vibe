@@ -40,3 +40,19 @@ Timestamp convention for new entries (henceforth): prefix each task with `[epoch
 - [epoch:1771385600] Investigating runtime ZAI rate-limit failure in Vibe after key setup; running recon and targeted reproduction to isolate request-path/model/config cause.
 - [epoch:1771386200] Confirmed ZAI key works after switching to the correct endpoint type; updating README troubleshooting notes for standard vs coding endpoint mismatch.
 - [epoch:1771387000] User acceptance pass: committing README/worklog updates, then running non-interactive `uv run vibe` in debug mode to check runtime behavior consistency.
+- [epoch:1771388200] Started OAuth auth implementation planning/execution for account-based model usage (Codex-style), including repo integration design and phased delivery.
+- [epoch:1771389000] Implemented OAuth MVP plumbing (provider auth schema, token store/resolver, generic backend auth refresh/retry, CLI auth commands), added focused tests, and documented OAuth usage in README.
+- [epoch:1771390000] Investigating OpenAI OAuth device-login failure returning HTML; aligning flow to Codex-style endpoints and improving non-JSON error reporting.
+- [epoch:1771390800] Added Codex-style OpenAI device flow support (`deviceauth/usercode` + poll + auth-code exchange), concise HTML error snippets, updated defaults/docs, and reran OAuth regression checks.
+- [epoch:1771391200] Debugging persistent OpenAI OAuth 403 during device login (run-time reproduction + endpoint/header parity check against Codex CLI implementation).
+- [epoch:1771391800] Resolved live 403 repro by updating local OpenAI OAuth endpoints to Codex-style values; added explicit migration hint for old `auth0.openai.com/oauth/device/code` configs and verified OAuth/typing tests.
+- [epoch:1771505889] Correcting local OpenAI model aliases after `gpt-5.3-codex` 404; updating `~/.vibe/config.toml` to API-available Codex IDs.
+- [epoch:1771506500] Clarified subscription-only goal (ChatGPT/Codex plane) and started replication plan for non-API-key backend routing in Vibe.
+- [epoch:1771507200] Began implementation of dedicated ChatGPT subscription backend plane for OpenAI Codex models (separate from api.openai.com generic path).
+- [epoch:1771507702] Continued ChatGPT subscription backend implementation: wiring backend enum/factory, codex responses transport, config migration, and targeted regressions.
+- [epoch:1771508696] Completed first pass of ChatGPT Codex backend plane: added `openai_chatgpt` backend + `/responses` adapter, JWT account-id extraction, provider/model defaults + migration, docs, and focused pytest/pyright validation.
+- [epoch:1771509200] Investigating post-merge auth failures (`openai-chatgpt` missing OAuth token, `openai` invalid API key) and applying subscription-plane config/auth migration fixes.
+- [epoch:1771509492] Resolved local runtime mismatch: remapped all codex aliases to `openai-chatgpt`, set active model to subscription plane, verified OAuth device flow startup, and confirmed token absence is now the only remaining blocker (requires completed login).
+- [epoch:1771510000] Investigating ChatGPT Codex 400 `Unsupported parameter: temperature`; adjusting subscription backend payload compatibility and adding regression coverage.
+- [epoch:1771510400] Fixed ChatGPT Codex payload compatibility by omitting `temperature` in `openai-chatgpt-codex` requests, added regression assertions, and reran backend tests + pyright.
+- [epoch:1771511000] User acceptance complete for ChatGPT subscription plane (responses + tool calls); preparing final commit and push for OAuth/backend split work.

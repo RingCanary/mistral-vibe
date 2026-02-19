@@ -6,7 +6,16 @@ import pytest
 
 from vibe.core.paths.config_paths import CONFIG_FILE
 from vibe.core.paths.global_paths import GLOBAL_CONFIG_FILE, VIBE_HOME
-from vibe.core.config import Backend, ModelConfig, ProviderConfig, VibeConfig
+from vibe.core.config import (
+    Backend,
+    ModelConfig,
+    OAuthConfig,
+    ProviderAuthConfig,
+    ProviderAuthType,
+    ProviderConfig,
+    VibeConfig,
+    WrongBackendError,
+)
 from vibe.core.trusted_folders import trusted_folders_manager
 
 
@@ -108,3 +117,103 @@ def test_get_active_model_and_provider_for_openai_and_zai(
     assert provider.name == provider_name
     assert provider.api_key_env_var == provider_api_key_env_var
     assert provider.backend == Backend.GENERIC
+
+
+def test_oauth_provider_does_not_require_api_key_env() -> None:
+    config = VibeConfig(
+        active_model="openai-oauth",
+        providers=[
+            ProviderConfig(
+                name="openai",
+                api_base="https://api.openai.com/v1",
+                api_key_env_var="",
+                backend=Backend.GENERIC,
+                auth=ProviderAuthConfig(
+                    type=ProviderAuthType.OAUTH,
+                    oauth=OAuthConfig(
+                        client_id="client-id",
+                        token_endpoint="https://auth0.openai.com/oauth/token",
+                        device_authorization_endpoint="https://auth0.openai.com/oauth/device/code",
+                        scopes=["openid", "offline_access"],
+                    ),
+                ),
+            )
+        ],
+        models=[
+            ModelConfig(
+                name="gpt-4o-mini",
+                provider="openai",
+                alias="openai-oauth",
+            )
+        ],
+        enable_auto_update=False,
+    )
+
+    active_model = config.get_active_model()
+    provider = config.get_provider_for_model(active_model)
+
+    assert provider.auth.type == ProviderAuthType.OAUTH
+
+
+def test_openai_chatgpt_provider_requires_openai_chatgpt_backend() -> None:
+    config = VibeConfig(
+        active_model="codex",
+        providers=[
+            ProviderConfig(
+                name="openai-chatgpt",
+                api_base="https://chatgpt.com/backend-api/codex",
+                api_style="openai-chatgpt-codex",
+                api_key_env_var="",
+                backend=Backend.OPENAI_CHATGPT,
+                auth=ProviderAuthConfig(
+                    type=ProviderAuthType.OAUTH,
+                    oauth=OAuthConfig(
+                        client_id="client-id",
+                        token_endpoint="https://auth.openai.com/oauth/token",
+                        device_authorization_endpoint="https://auth.openai.com/api/accounts/deviceauth/usercode",
+                        device_poll_endpoint="https://auth.openai.com/api/accounts/deviceauth/token",
+                        scopes=["openid", "offline_access"],
+                    ),
+                ),
+            )
+        ],
+        models=[
+            ModelConfig(
+                name="gpt-5.3-codex",
+                provider="openai-chatgpt",
+                alias="codex",
+            )
+        ],
+        enable_auto_update=False,
+    )
+
+    active_model = config.get_active_model()
+    provider = config.get_provider_for_model(active_model)
+
+    assert active_model.alias == "codex"
+    assert provider.backend == Backend.OPENAI_CHATGPT
+
+
+def test_openai_chatgpt_provider_rejects_generic_backend() -> None:
+    with pytest.raises(WrongBackendError):
+        VibeConfig(
+            active_model="codex",
+            providers=[
+                ProviderConfig(
+                    name="openai-chatgpt",
+                    api_base="https://chatgpt.com/backend-api/codex",
+                    api_style="openai-chatgpt-codex",
+                    api_key_env_var="",
+                    backend=Backend.GENERIC,
+                    auth=ProviderAuthConfig(type=ProviderAuthType.OAUTH),
+                )
+            ],
+            models=[
+                ModelConfig(
+                    name="gpt-5.3-codex",
+                    provider="openai-chatgpt",
+                    alias="codex",
+                )
+            ],
+            enable_auto_update=False,
+        )

@@ -139,6 +139,45 @@ class SessionLoggingConfig(BaseSettings):
 class Backend(StrEnum):
     MISTRAL = auto()
     GENERIC = auto()
+    OPENAI_CHATGPT = auto()
+
+
+class ProviderAuthType(StrEnum):
+    API_KEY = auto()
+    OAUTH = auto()
+    NONE = auto()
+
+
+class OAuthDeviceFlowStyle(StrEnum):
+    RFC8628 = auto()
+    CODEX = auto()
+
+
+class OAuthConfig(BaseModel):
+    device_flow_style: OAuthDeviceFlowStyle = OAuthDeviceFlowStyle.RFC8628
+    client_id: str = ""
+    client_id_env_var: str = ""
+    authorization_endpoint: str = ""
+    device_authorization_endpoint: str = ""
+    device_poll_endpoint: str = ""
+    device_redirect_uri: str = ""
+    token_endpoint: str = ""
+    revoke_endpoint: str = ""
+    scopes: list[str] = Field(default_factory=list)
+    account_header_name: str = ""
+    account_id_env_var: str = ""
+
+    def resolved_client_id(self) -> str:
+        if self.client_id:
+            return self.client_id
+        if self.client_id_env_var:
+            return os.getenv(self.client_id_env_var, "")
+        return ""
+
+
+class ProviderAuthConfig(BaseModel):
+    type: ProviderAuthType = ProviderAuthType.API_KEY
+    oauth: OAuthConfig | None = None
 
 
 class ProviderConfig(BaseModel):
@@ -150,6 +189,7 @@ class ProviderConfig(BaseModel):
     reasoning_field_name: str = "reasoning_content"
     project_id: str = ""
     region: str = ""
+    auth: ProviderAuthConfig = Field(default_factory=ProviderAuthConfig)
 
 
 MISTRAL_API_BASE_PREFIXES = (
@@ -157,10 +197,20 @@ MISTRAL_API_BASE_PREFIXES = (
     "https://api.mistral.ai",
 )
 
+OPENAI_CHATGPT_API_BASE_PREFIXES = (
+    "https://chatgpt.com/backend-api",
+    "https://chat.openai.com/backend-api",
+)
+
 
 def _is_mistral_api_base(api_base: str) -> bool:
     normalized = (api_base or "").rstrip("/")
     return any(normalized.startswith(prefix) for prefix in MISTRAL_API_BASE_PREFIXES)
+
+
+def _is_openai_chatgpt_api_base(api_base: str) -> bool:
+    normalized = (api_base or "").rstrip("/")
+    return any(normalized.startswith(prefix) for prefix in OPENAI_CHATGPT_API_BASE_PREFIXES)
 
 
 class _MCPBase(BaseModel):
@@ -289,6 +339,47 @@ DEFAULT_PROVIDERS = [
         name="openai",
         api_base="https://api.openai.com/v1",
         api_key_env_var="OPENAI_API_KEY",
+        auth=ProviderAuthConfig(
+            type=ProviderAuthType.API_KEY,
+            oauth=OAuthConfig(
+                device_flow_style=OAuthDeviceFlowStyle.CODEX,
+                client_id="app_EMoamEEZ73f0CkXaXp7hrann",
+                client_id_env_var="OPENAI_OAUTH_CLIENT_ID",
+                authorization_endpoint="https://auth.openai.com/authorize",
+                device_authorization_endpoint="https://auth.openai.com/api/accounts/deviceauth/usercode",
+                device_poll_endpoint="https://auth.openai.com/api/accounts/deviceauth/token",
+                device_redirect_uri="https://auth.openai.com/deviceauth/callback",
+                token_endpoint="https://auth.openai.com/oauth/token",
+                revoke_endpoint="https://auth.openai.com/oauth/revoke",
+                scopes=["openid", "profile", "email", "offline_access"],
+                account_header_name="ChatGPT-Account-Id",
+                account_id_env_var="OPENAI_ACCOUNT_ID",
+            ),
+        ),
+    ),
+    ProviderConfig(
+        name="openai-chatgpt",
+        api_base="https://chatgpt.com/backend-api/codex",
+        api_style="openai-chatgpt-codex",
+        api_key_env_var="",
+        backend=Backend.OPENAI_CHATGPT,
+        auth=ProviderAuthConfig(
+            type=ProviderAuthType.OAUTH,
+            oauth=OAuthConfig(
+                device_flow_style=OAuthDeviceFlowStyle.CODEX,
+                client_id="app_EMoamEEZ73f0CkXaXp7hrann",
+                client_id_env_var="OPENAI_OAUTH_CLIENT_ID",
+                authorization_endpoint="https://auth.openai.com/authorize",
+                device_authorization_endpoint="https://auth.openai.com/api/accounts/deviceauth/usercode",
+                device_poll_endpoint="https://auth.openai.com/api/accounts/deviceauth/token",
+                device_redirect_uri="https://auth.openai.com/deviceauth/callback",
+                token_endpoint="https://auth.openai.com/oauth/token",
+                revoke_endpoint="https://auth.openai.com/oauth/revoke",
+                scopes=["openid", "profile", "email", "offline_access"],
+                account_header_name="ChatGPT-Account-Id",
+                account_id_env_var="OPENAI_ACCOUNT_ID",
+            ),
+        ),
     ),
     ProviderConfig(
         name="zai",
@@ -323,6 +414,11 @@ DEFAULT_MODELS = [
         alias="openai-mini",
     ),
     ModelConfig(
+        name="gpt-5.3-codex",
+        provider="openai-chatgpt",
+        alias="codex",
+    ),
+    ModelConfig(
         name="glm-4.5",
         provider="zai",
         alias="zai-glm-45",
@@ -355,6 +451,7 @@ class VibeConfig(BaseSettings):
     enable_update_checks: bool = True
     enable_auto_update: bool = True
     api_timeout: float = 720.0
+    skip_credentials_validation: bool = Field(default=False, exclude=True)
 
     # TODO(vibe-nuage): remove exclude=True once the feature is publicly available
     nuage_enabled: bool = Field(default=False, exclude=True)
@@ -512,9 +609,14 @@ class VibeConfig(BaseSettings):
 
     @model_validator(mode="after")
     def _check_api_key(self) -> VibeConfig:
+        if self.skip_credentials_validation:
+            return self
+
         try:
             active_model = self.get_active_model()
             provider = self.get_provider_for_model(active_model)
+            if provider.auth.type != ProviderAuthType.API_KEY:
+                return self
             api_key_env = provider.api_key_env_var
             if api_key_env and not os.getenv(api_key_env):
                 raise MissingAPIKeyError(api_key_env, provider.name)
@@ -527,11 +629,12 @@ class VibeConfig(BaseSettings):
         try:
             active_model = self.get_active_model()
             provider = self.get_provider_for_model(active_model)
-            expected_backend = (
-                Backend.MISTRAL
-                if _is_mistral_api_base(provider.api_base)
-                else Backend.GENERIC
-            )
+            if _is_mistral_api_base(provider.api_base):
+                expected_backend = Backend.MISTRAL
+            elif _is_openai_chatgpt_api_base(provider.api_base):
+                expected_backend = Backend.OPENAI_CHATGPT
+            else:
+                expected_backend = Backend.GENERIC
             if provider.backend != expected_backend:
                 raise WrongBackendError(provider.backend, expected_backend)
 
@@ -623,7 +726,59 @@ class VibeConfig(BaseSettings):
 
     @classmethod
     def _migrate(cls) -> None:
-        pass
+        config = TomlFileSettingsSource(cls).toml_data
+        providers = config.get("providers")
+        models = config.get("models")
+        if not isinstance(providers, list) or not isinstance(models, list):
+            return
+
+        has_openai_chatgpt_provider = any(
+            isinstance(provider, dict) and provider.get("name") == "openai-chatgpt"
+            for provider in providers
+        )
+        if has_openai_chatgpt_provider:
+            return
+
+        openai_provider_index: int | None = None
+        for idx, provider in enumerate(providers):
+            if not isinstance(provider, dict):
+                continue
+            if provider.get("name") != "openai":
+                continue
+
+            auth = provider.get("auth")
+            if not isinstance(auth, dict) or auth.get("type") != "oauth":
+                continue
+
+            openai_provider_index = idx
+            break
+
+        if openai_provider_index is None:
+            return
+
+        openai_provider = providers[openai_provider_index]
+        if not isinstance(openai_provider, dict):
+            return
+
+        oauth_provider = dict(openai_provider)
+        oauth_provider["name"] = "openai-chatgpt"
+        oauth_provider["api_base"] = "https://chatgpt.com/backend-api/codex"
+        oauth_provider["backend"] = "openai_chatgpt"
+        oauth_provider["api_style"] = "openai-chatgpt-codex"
+        oauth_provider["api_key_env_var"] = ""
+        providers.append(oauth_provider)
+
+        for model in models:
+            if not isinstance(model, dict):
+                continue
+            if model.get("provider") != "openai":
+                continue
+            model_name = str(model.get("name") or "")
+            if "codex" not in model_name.lower():
+                continue
+            model["provider"] = "openai-chatgpt"
+
+        cls.dump_config(to_jsonable_python(config, exclude_none=True, fallback=str))
 
     @classmethod
     def load(cls, **overrides: Any) -> VibeConfig:

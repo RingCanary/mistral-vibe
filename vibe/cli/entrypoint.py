@@ -78,6 +78,22 @@ def parse_arguments() -> argparse.Namespace:
     )
     parser.add_argument("--setup", action="store_true", help="Setup API key and exit")
     parser.add_argument(
+        "--auth",
+        choices=["login", "status", "logout"],
+        help="Run authentication flow for a provider and exit",
+    )
+    parser.add_argument(
+        "--provider",
+        dest="auth_provider",
+        metavar="NAME",
+        help="Provider to use with --auth (defaults to active model provider)",
+    )
+    parser.add_argument(
+        "--no-browser",
+        action="store_true",
+        help="Do not auto-open browser during OAuth login",
+    )
+    parser.add_argument(
         "--workdir",
         type=Path,
         metavar="DIR",

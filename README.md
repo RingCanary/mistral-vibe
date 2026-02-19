@@ -395,6 +395,65 @@ Common setup:
 >
 > If the key type and endpoint do not match, requests can fail with rate-limit/auth errors (for example 429).
 
+### OpenAI Auth Modes
+
+OpenAI can be configured in two separate modes:
+
+- **Platform API mode** (`api.openai.com`): API key auth (`OPENAI_API_KEY`), backend `generic`
+- **ChatGPT subscription mode** (`chatgpt.com/backend-api/codex`): OAuth auth, backend `openai_chatgpt`
+
+For ChatGPT Plus/Pro Codex usage, configure a dedicated `openai-chatgpt` provider:
+
+```toml
+[[providers]]
+name = "openai-chatgpt"
+api_base = "https://chatgpt.com/backend-api/codex"
+api_style = "openai-chatgpt-codex"
+api_key_env_var = ""
+backend = "openai_chatgpt"
+
+[providers.auth]
+type = "oauth"
+
+[providers.auth.oauth]
+device_flow_style = "codex"
+client_id_env_var = "OPENAI_OAUTH_CLIENT_ID"
+authorization_endpoint = "https://auth.openai.com/authorize"
+device_authorization_endpoint = "https://auth.openai.com/api/accounts/deviceauth/usercode"
+device_poll_endpoint = "https://auth.openai.com/api/accounts/deviceauth/token"
+device_redirect_uri = "https://auth.openai.com/deviceauth/callback"
+token_endpoint = "https://auth.openai.com/oauth/token"
+revoke_endpoint = "https://auth.openai.com/oauth/revoke"
+scopes = ["openid", "profile", "email", "offline_access"]
+account_header_name = "ChatGPT-Account-Id"
+account_id_env_var = "OPENAI_ACCOUNT_ID"
+
+[[models]]
+name = "gpt-5.3-codex"
+provider = "openai-chatgpt"
+alias = "codex"
+```
+
+Then run:
+
+```bash
+vibe --auth login --provider openai-chatgpt
+vibe --auth status --provider openai-chatgpt
+vibe --auth logout --provider openai-chatgpt
+```
+
+For headless/device scenarios:
+
+```bash
+vibe --auth login --provider openai-chatgpt --no-browser
+```
+
+In non-interactive mode (`vibe --prompt ...`), OAuth providers require a stored token. If no token exists, Vibe exits with a login hint.
+
+For `openai-chatgpt` Codex models, Vibe does not send `temperature` because ChatGPT Codex `/responses` rejects that parameter.
+
+If login init fails and you see HTML in the response, verify your OpenAI OAuth endpoints use the Codex-style device flow values above.
+
 ### Multi-Provider Configuration
 
 Providers and model aliases are configured in your `config.toml`.
@@ -417,6 +476,29 @@ api_key_env_var = "OPENAI_API_KEY"
 backend = "generic"
 
 [[providers]]
+name = "openai-chatgpt"
+api_base = "https://chatgpt.com/backend-api/codex"
+api_style = "openai-chatgpt-codex"
+api_key_env_var = ""
+backend = "openai_chatgpt"
+
+[providers.auth]
+type = "oauth"
+
+[providers.auth.oauth]
+device_flow_style = "codex"
+client_id_env_var = "OPENAI_OAUTH_CLIENT_ID"
+authorization_endpoint = "https://auth.openai.com/authorize"
+device_authorization_endpoint = "https://auth.openai.com/api/accounts/deviceauth/usercode"
+device_poll_endpoint = "https://auth.openai.com/api/accounts/deviceauth/token"
+device_redirect_uri = "https://auth.openai.com/deviceauth/callback"
+token_endpoint = "https://auth.openai.com/oauth/token"
+revoke_endpoint = "https://auth.openai.com/oauth/revoke"
+scopes = ["openid", "profile", "email", "offline_access"]
+account_header_name = "ChatGPT-Account-Id"
+account_id_env_var = "OPENAI_ACCOUNT_ID"
+
+[[providers]]
 name = "zai"
 api_base = "https://api.z.ai/api/paas/v4"
 api_key_env_var = "ZAI_API_KEY"
@@ -428,6 +510,13 @@ provider = "openai"
 alias = "openai-mini"
 input_price = 2.0
 output_price = 6.0
+
+[[models]]
+name = "gpt-5.3-codex"
+provider = "openai-chatgpt"
+alias = "codex"
+input_price = 0.0
+output_price = 0.0
 
 [[models]]
 name = "glm-4.5"

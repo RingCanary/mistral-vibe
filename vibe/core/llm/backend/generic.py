@@ -2,12 +2,18 @@ from __future__ import annotations
 
 from collections.abc import AsyncGenerator
 import json
-import os
 import types
 from typing import TYPE_CHECKING, Any, ClassVar, NamedTuple
 
 import httpx
 
+from vibe.core.auth.oauth import (
+    AuthRequiredError,
+    ProviderAuthResolver,
+    ResolvedProviderAuth,
+    SupportsProviderAuthResolver,
+)
+from vibe.core.config import ProviderAuthType
 from vibe.core.llm.backend.anthropic import AnthropicAdapter
 from vibe.core.llm.backend.base import APIAdapter, PreparedRequest
 from vibe.core.llm.backend.vertex import VertexAnthropicAdapter
@@ -15,11 +21,13 @@ from vibe.core.llm.exceptions import BackendErrorBuilder
 from vibe.core.llm.message_utils import merge_consecutive_user_messages
 from vibe.core.types import (
     AvailableTool,
+    FunctionCall,
     LLMChunk,
     LLMMessage,
     LLMUsage,
     Role,
     StrToolChoice,
+    ToolCall,
 )
 from vibe.core.utils import async_generator_retry, async_retry
 
@@ -155,8 +163,367 @@ class OpenAIAdapter(APIAdapter):
         return LLMChunk(message=message, usage=usage)
 
 
+class OpenAIChatGPTCodexAdapter(APIAdapter):
+    endpoint: ClassVar[str] = "/responses"
+
+    def build_headers(
+        self, api_key: str | None = None, *, enable_streaming: bool
+    ) -> dict[str, str]:
+        headers = {
+            "Content-Type": "application/json",
+            "OpenAI-Beta": "responses=experimental",
+            "originator": "vibe",
+        }
+        if enable_streaming:
+            headers["Accept"] = "text/event-stream"
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
+        return headers
+
+    def prepare_request(  # noqa: PLR0913
+        self,
+        *,
+        model_name: str,
+        messages: list[LLMMessage],
+        temperature: float,
+        tools: list[AvailableTool] | None,
+        max_tokens: int | None,
+        tool_choice: StrToolChoice | AvailableTool | None,
+        enable_streaming: bool,
+        provider: ProviderConfig,
+        api_key: str | None = None,
+        thinking: str = "off",
+    ) -> PreparedRequest:
+        _ = provider
+        merged_messages = merge_consecutive_user_messages(messages)
+        instructions, input_items = self._to_responses_input(merged_messages)
+
+        payload: dict[str, Any] = {
+            "model": model_name,
+            "store": False,
+            "stream": enable_streaming,
+            "input": input_items,
+            "parallel_tool_calls": True,
+            "text": {"verbosity": "medium"},
+        }
+        if instructions:
+            payload["instructions"] = instructions
+
+        if tools:
+            payload["tools"] = [
+                {
+                    "type": "function",
+                    "name": tool.function.name,
+                    "description": tool.function.description,
+                    "parameters": tool.function.parameters,
+                    "strict": False,
+                }
+                for tool in tools
+            ]
+
+        if tool_choice:
+            if isinstance(tool_choice, str):
+                payload["tool_choice"] = tool_choice
+            else:
+                payload["tool_choice"] = {
+                    "type": "function",
+                    "name": tool_choice.function.name,
+                }
+
+        if max_tokens is not None:
+            payload["max_output_tokens"] = max_tokens
+
+        _ = temperature
+
+        if thinking != "off":
+            payload["reasoning"] = {
+                "effort": thinking,
+                "summary": "auto",
+            }
+            payload["include"] = ["reasoning.encrypted_content"]
+
+        headers = self.build_headers(api_key, enable_streaming=enable_streaming)
+        body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        return PreparedRequest(self.endpoint, headers, body)
+
+    def parse_response(
+        self, data: dict[str, Any], provider: ProviderConfig
+    ) -> LLMChunk:
+        _ = provider
+        event_type = self._as_str(data.get("type"))
+        if event_type:
+            return self._parse_stream_event(data, event_type)
+        return self._parse_non_stream_response(data)
+
+    def _to_responses_input(
+        self, messages: list[LLMMessage]
+    ) -> tuple[str | None, list[dict[str, Any]]]:
+        instruction_parts: list[str] = []
+        input_items: list[dict[str, Any]] = []
+
+        for msg in messages:
+            if msg.role == Role.system:
+                if msg.content:
+                    instruction_parts.append(msg.content)
+                continue
+
+            if msg.role == Role.user:
+                input_items.append(
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "input_text",
+                                "text": msg.content or "",
+                            }
+                        ],
+                    }
+                )
+                continue
+
+            if msg.role == Role.assistant:
+                if msg.content:
+                    input_items.append(
+                        {
+                            "type": "message",
+                            "role": "assistant",
+                            "content": [
+                                {
+                                    "type": "output_text",
+                                    "text": msg.content,
+                                }
+                            ],
+                            "status": "completed",
+                        }
+                    )
+
+                for idx, tool_call in enumerate(msg.tool_calls or []):
+                    call_id = tool_call.id or f"call_{idx}"
+                    input_items.append(
+                        {
+                            "type": "function_call",
+                            "call_id": call_id,
+                            "name": tool_call.function.name or "",
+                            "arguments": tool_call.function.arguments or "{}",
+                        }
+                    )
+                continue
+
+            if msg.role == Role.tool:
+                input_items.append(
+                    {
+                        "type": "function_call_output",
+                        "call_id": msg.tool_call_id or "",
+                        "output": msg.content or "",
+                    }
+                )
+
+        instructions = "\n\n".join(instruction_parts) if instruction_parts else None
+        return instructions, input_items
+
+    def _parse_non_stream_response(self, data: dict[str, Any]) -> LLMChunk:
+        output_items = self._as_list(data.get("output"))
+        content_parts: list[str] = []
+        reasoning_parts: list[str] = []
+        tool_calls: list[ToolCall] = []
+
+        tool_index = 0
+        for output in output_items:
+            item = self._as_dict(output)
+            item_type = self._as_str(item.get("type"))
+
+            if item_type == "message":
+                role = self._as_str(item.get("role"))
+                if role and role != "assistant":
+                    continue
+                for content in self._as_list(item.get("content")):
+                    content_item = self._as_dict(content)
+                    content_type = self._as_str(content_item.get("type"))
+                    if content_type in {"output_text", "text"}:
+                        text = self._as_str(content_item.get("text"))
+                        if text:
+                            content_parts.append(text)
+                    elif content_type == "refusal":
+                        refusal = self._as_str(content_item.get("refusal"))
+                        if refusal:
+                            content_parts.append(refusal)
+                continue
+
+            if item_type == "reasoning":
+                summaries = self._as_list(item.get("summary"))
+                summary_texts = [
+                    self._as_str(self._as_dict(summary).get("text"))
+                    for summary in summaries
+                ]
+                joined_summary = "\n\n".join(text for text in summary_texts if text)
+                if joined_summary:
+                    reasoning_parts.append(joined_summary)
+                continue
+
+            if item_type == "function_call":
+                call = self._tool_call_from_item(item, tool_index, include_arguments=True)
+                if call:
+                    tool_calls.append(call)
+                    tool_index += 1
+
+        usage = self._usage_from_usage_dict(self._as_dict(data.get("usage")))
+        message = LLMMessage(
+            role=Role.assistant,
+            content="".join(content_parts) or None,
+            reasoning_content="\n\n".join(reasoning_parts) or None,
+            tool_calls=tool_calls or None,
+        )
+        return LLMChunk(message=message, usage=usage)
+
+    def _parse_stream_event(self, data: dict[str, Any], event_type: str) -> LLMChunk:
+        if event_type in {"response.output_text.delta", "response.refusal.delta"}:
+            delta = self._as_str(data.get("delta"))
+            if not delta:
+                return self._empty_chunk()
+            return LLMChunk(
+                message=LLMMessage(role=Role.assistant, content=delta),
+                usage=None,
+            )
+
+        if event_type == "response.reasoning_summary_text.delta":
+            delta = self._as_str(data.get("delta"))
+            if not delta:
+                return self._empty_chunk()
+            return LLMChunk(
+                message=LLMMessage(role=Role.assistant, reasoning_content=delta),
+                usage=None,
+            )
+
+        if event_type == "response.output_item.added":
+            item = self._as_dict(data.get("item"))
+            if self._as_str(item.get("type")) == "function_call":
+                tool_call = self._tool_call_from_item(
+                    item,
+                    index=self._as_int(data.get("output_index"), 0),
+                    include_arguments=False,
+                )
+                if tool_call:
+                    return LLMChunk(
+                        message=LLMMessage(role=Role.assistant, tool_calls=[tool_call]),
+                        usage=None,
+                    )
+            return self._empty_chunk()
+
+        if event_type == "response.output_item.done":
+            item = self._as_dict(data.get("item"))
+            if self._as_str(item.get("type")) == "function_call":
+                tool_call = self._tool_call_from_item(
+                    item,
+                    index=self._as_int(data.get("output_index"), 0),
+                    include_arguments=False,
+                )
+                if tool_call:
+                    return LLMChunk(
+                        message=LLMMessage(role=Role.assistant, tool_calls=[tool_call]),
+                        usage=None,
+                    )
+            return self._empty_chunk()
+
+        if event_type == "response.function_call_arguments.delta":
+            call_id = self._as_str(data.get("call_id")) or self._as_str(
+                data.get("item_id")
+            )
+            delta = self._as_str(data.get("delta"))
+            if not call_id or not delta:
+                return self._empty_chunk()
+
+            tool_call = ToolCall(
+                id=call_id,
+                index=self._as_int(data.get("output_index"), 0),
+                function=FunctionCall(
+                    name=self._as_str(data.get("name")) or None,
+                    arguments=delta,
+                ),
+            )
+            return LLMChunk(
+                message=LLMMessage(role=Role.assistant, tool_calls=[tool_call]),
+                usage=None,
+            )
+
+        if event_type in {"response.completed", "response.done"}:
+            usage = self._usage_from_usage_dict(
+                self._as_dict(self._as_dict(data.get("response")).get("usage"))
+            )
+            return LLMChunk(
+                message=LLMMessage(role=Role.assistant, content=""),
+                usage=usage,
+            )
+
+        return self._empty_chunk()
+
+    def _tool_call_from_item(
+        self,
+        item: dict[str, Any],
+        index: int,
+        *,
+        include_arguments: bool,
+    ) -> ToolCall | None:
+        call_id = self._as_str(item.get("call_id")) or self._as_str(item.get("id"))
+        if not call_id:
+            return None
+
+        name = self._as_str(item.get("name")) or None
+        arguments = self._as_str(item.get("arguments")) if include_arguments else ""
+
+        return ToolCall(
+            id=call_id,
+            index=index,
+            function=FunctionCall(name=name, arguments=arguments or None),
+        )
+
+    def _usage_from_usage_dict(self, usage_data: dict[str, Any]) -> LLMUsage:
+        prompt_tokens = self._as_int(
+            usage_data.get("input_tokens", usage_data.get("prompt_tokens", 0)),
+            0,
+        )
+        completion_tokens = self._as_int(
+            usage_data.get("output_tokens", usage_data.get("completion_tokens", 0)),
+            0,
+        )
+        return LLMUsage(
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+        )
+
+    def _empty_chunk(self) -> LLMChunk:
+        return LLMChunk(message=LLMMessage(role=Role.assistant, content=""), usage=None)
+
+    def _as_dict(self, value: Any) -> dict[str, Any]:
+        return value if isinstance(value, dict) else {}
+
+    def _as_list(self, value: Any) -> list[Any]:
+        return value if isinstance(value, list) else []
+
+    def _as_str(self, value: Any) -> str:
+        if isinstance(value, str):
+            return value
+        if value is None:
+            return ""
+        return str(value)
+
+    def _as_int(self, value: Any, default: int) -> int:
+        if isinstance(value, bool):
+            return default
+        if isinstance(value, int):
+            return value
+        if isinstance(value, float):
+            return int(value)
+        if isinstance(value, str):
+            try:
+                return int(float(value))
+            except ValueError:
+                return default
+        return default
+
+
 ADAPTERS: dict[str, APIAdapter] = {
     "openai": OpenAIAdapter(),
+    "openai-chatgpt-codex": OpenAIChatGPTCodexAdapter(),
     "anthropic": AnthropicAdapter(),
     "vertex-anthropic": VertexAnthropicAdapter(),
 }
@@ -169,6 +536,7 @@ class GenericBackend:
         client: httpx.AsyncClient | None = None,
         provider: ProviderConfig,
         timeout: float = 720.0,
+        auth_resolver: SupportsProviderAuthResolver | None = None,
     ) -> None:
         """Initialize the backend.
 
@@ -179,6 +547,49 @@ class GenericBackend:
         self._owns_client = client is None
         self._provider = provider
         self._timeout = timeout
+        self._auth_resolver = auth_resolver or ProviderAuthResolver()
+
+    async def _build_prepared_request(  # noqa: PLR0913
+        self,
+        *,
+        adapter: APIAdapter,
+        model: ModelConfig,
+        messages: list[LLMMessage],
+        temperature: float,
+        tools: list[AvailableTool] | None,
+        max_tokens: int | None,
+        tool_choice: StrToolChoice | AvailableTool | None,
+        enable_streaming: bool,
+        extra_headers: dict[str, str] | None,
+        auth_context: ResolvedProviderAuth,
+    ) -> tuple[PreparedRequest, dict[str, str], str]:
+        req = adapter.prepare_request(
+            model_name=model.name,
+            messages=messages,
+            temperature=temperature,
+            tools=tools,
+            max_tokens=max_tokens,
+            tool_choice=tool_choice,
+            enable_streaming=enable_streaming,
+            provider=self._provider,
+            api_key=auth_context.token,
+            thinking=model.thinking,
+        )
+
+        headers = dict(req.headers)
+        headers.update(auth_context.extra_headers)
+        if extra_headers:
+            headers.update(extra_headers)
+
+        base = req.base_url or self._provider.api_base
+        url = f"{base}{req.endpoint}"
+        return req, headers, url
+
+    async def _resolve_auth(self) -> ResolvedProviderAuth:
+        try:
+            return await self._auth_resolver.resolve(self._provider)
+        except AuthRequiredError as exc:
+            raise RuntimeError(str(exc)) from exc
 
     async def __aenter__(self) -> GenericBackend:
         if self._client is None:
@@ -218,40 +629,62 @@ class GenericBackend:
         tool_choice: StrToolChoice | AvailableTool | None = None,
         extra_headers: dict[str, str] | None = None,
     ) -> LLMChunk:
-        api_key = (
-            os.getenv(self._provider.api_key_env_var)
-            if self._provider.api_key_env_var
-            else None
-        )
-
         api_style = getattr(self._provider, "api_style", "openai")
         adapter = ADAPTERS[api_style]
-
-        req = adapter.prepare_request(
-            model_name=model.name,
+        auth_context = await self._resolve_auth()
+        req, headers, url = await self._build_prepared_request(
+            adapter=adapter,
+            model=model,
             messages=messages,
             temperature=temperature,
             tools=tools,
             max_tokens=max_tokens,
             tool_choice=tool_choice,
             enable_streaming=False,
-            provider=self._provider,
-            api_key=api_key,
-            thinking=model.thinking,
+            extra_headers=extra_headers,
+            auth_context=auth_context,
         )
-
-        headers = req.headers
-        if extra_headers:
-            headers.update(extra_headers)
-
-        base = req.base_url or self._provider.api_base
-        url = f"{base}{req.endpoint}"
 
         try:
             res_data, _ = await self._make_request(url, req.body, headers)
             return adapter.parse_response(res_data, self._provider)
 
         except httpx.HTTPStatusError as e:
+            if (
+                e.response.status_code == 401
+                and auth_context.auth_type == ProviderAuthType.OAUTH
+            ):
+                refreshed_auth_context = await self._auth_resolver.force_refresh(
+                    self._provider
+                )
+                req, headers, url = await self._build_prepared_request(
+                    adapter=adapter,
+                    model=model,
+                    messages=messages,
+                    temperature=temperature,
+                    tools=tools,
+                    max_tokens=max_tokens,
+                    tool_choice=tool_choice,
+                    enable_streaming=False,
+                    extra_headers=extra_headers,
+                    auth_context=refreshed_auth_context,
+                )
+                try:
+                    res_data, _ = await self._make_request(url, req.body, headers)
+                    return adapter.parse_response(res_data, self._provider)
+                except httpx.HTTPStatusError as final_err:
+                    raise BackendErrorBuilder.build_http_error(
+                        provider=self._provider.name,
+                        endpoint=url,
+                        response=final_err.response,
+                        headers=final_err.response.headers,
+                        model=model.name,
+                        messages=messages,
+                        temperature=temperature,
+                        has_tools=bool(tools),
+                        tool_choice=tool_choice,
+                    ) from final_err
+
             raise BackendErrorBuilder.build_http_error(
                 provider=self._provider.name,
                 endpoint=url,
@@ -286,40 +719,65 @@ class GenericBackend:
         tool_choice: StrToolChoice | AvailableTool | None = None,
         extra_headers: dict[str, str] | None = None,
     ) -> AsyncGenerator[LLMChunk, None]:
-        api_key = (
-            os.getenv(self._provider.api_key_env_var)
-            if self._provider.api_key_env_var
-            else None
-        )
-
         api_style = getattr(self._provider, "api_style", "openai")
         adapter = ADAPTERS[api_style]
-
-        req = adapter.prepare_request(
-            model_name=model.name,
+        auth_context = await self._resolve_auth()
+        req, headers, url = await self._build_prepared_request(
+            adapter=adapter,
+            model=model,
             messages=messages,
             temperature=temperature,
             tools=tools,
             max_tokens=max_tokens,
             tool_choice=tool_choice,
             enable_streaming=True,
-            provider=self._provider,
-            api_key=api_key,
-            thinking=model.thinking,
+            extra_headers=extra_headers,
+            auth_context=auth_context,
         )
-
-        headers = req.headers
-        if extra_headers:
-            headers.update(extra_headers)
-
-        base = req.base_url or self._provider.api_base
-        url = f"{base}{req.endpoint}"
 
         try:
             async for res_data in self._make_streaming_request(url, req.body, headers):
                 yield adapter.parse_response(res_data, self._provider)
 
         except httpx.HTTPStatusError as e:
+            if (
+                e.response.status_code == 401
+                and auth_context.auth_type == ProviderAuthType.OAUTH
+            ):
+                refreshed_auth_context = await self._auth_resolver.force_refresh(
+                    self._provider
+                )
+                req, headers, url = await self._build_prepared_request(
+                    adapter=adapter,
+                    model=model,
+                    messages=messages,
+                    temperature=temperature,
+                    tools=tools,
+                    max_tokens=max_tokens,
+                    tool_choice=tool_choice,
+                    enable_streaming=True,
+                    extra_headers=extra_headers,
+                    auth_context=refreshed_auth_context,
+                )
+                try:
+                    async for res_data in self._make_streaming_request(
+                        url, req.body, headers
+                    ):
+                        yield adapter.parse_response(res_data, self._provider)
+                    return
+                except httpx.HTTPStatusError as final_err:
+                    raise BackendErrorBuilder.build_http_error(
+                        provider=self._provider.name,
+                        endpoint=url,
+                        response=final_err.response,
+                        headers=final_err.response.headers,
+                        model=model.name,
+                        messages=messages,
+                        temperature=temperature,
+                        has_tools=bool(tools),
+                        tool_choice=tool_choice,
+                    ) from final_err
+
             raise BackendErrorBuilder.build_http_error(
                 provider=self._provider.name,
                 endpoint=url,

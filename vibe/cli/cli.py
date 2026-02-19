@@ -5,6 +5,7 @@ import sys
 
 from rich import print as rprint
 
+from vibe.cli.auth_flow import run_auth_flow
 from vibe.cli.textual_ui.app import run_textual_ui
 from vibe.core.agent_loop import AgentLoop
 from vibe.core.agents.models import BuiltinAgentName
@@ -43,9 +44,9 @@ def get_prompt_from_stdin() -> str | None:
     return None
 
 
-def load_config_or_exit() -> VibeConfig:
+def load_config_or_exit(*, skip_credentials_validation: bool = False) -> VibeConfig:
     try:
-        return VibeConfig.load()
+        return VibeConfig.load(skip_credentials_validation=skip_credentials_validation)
     except MissingAPIKeyError:
         run_onboarding()
         return VibeConfig.load()
@@ -124,6 +125,11 @@ def _load_messages_from_previous_session(
 def run_cli(args: argparse.Namespace) -> None:
     load_dotenv_values()
     bootstrap_config_files()
+
+    if args.auth:
+        config = load_config_or_exit(skip_credentials_validation=True)
+        exit_code = run_auth_flow(args, config)
+        sys.exit(exit_code)
 
     if args.setup:
         run_onboarding()
