@@ -47,7 +47,7 @@ class FileIndexer:
     def stats(self) -> FileIndexStats:
         return self._stats
 
-    def get_index(self, root: Path) -> list[IndexEntry]:
+    def get_index(self, root: Path) -> tuple[IndexEntry, ...]:
         resolved_root = root.resolve()
 
         with self._lock:  # read current root without blocking rebuild bookkeeping
