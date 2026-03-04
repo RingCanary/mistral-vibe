@@ -97,9 +97,13 @@ class FileIndexStore:
 
             if path.is_dir():
                 dir_entry = self._create_entry(rel_str, path.name, path, True)
-                if dir_entry:
-                    self._entries_by_rel[rel_str] = dir_entry
-                    modified = True
+                if dir_entry is None:
+                    if self._remove_entry(rel_str):
+                        modified = True
+                    continue
+
+                self._entries_by_rel[rel_str] = dir_entry
+                modified = True
                 for entry in self._walk_directory(path, rel_str):
                     self._entries_by_rel[entry.rel] = entry
                     modified = True
@@ -107,6 +111,8 @@ class FileIndexStore:
                 file_entry = self._create_entry(rel_str, path.name, path, False)
                 if file_entry:
                     self._entries_by_rel[file_entry.rel] = file_entry
+                    modified = True
+                elif self._remove_entry(rel_str):
                     modified = True
 
         if modified:

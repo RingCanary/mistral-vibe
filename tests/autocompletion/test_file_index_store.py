@@ -44,3 +44,38 @@ def test_apply_changes_invalidates_snapshot_cache(tmp_path: Path) -> None:
     assert updated_snapshot is not initial_snapshot
     assert [entry.rel for entry in updated_snapshot] == ["alpha.py", "beta.py"]
     assert stats.incremental_updates == 1
+
+
+def test_apply_changes_removes_file_when_it_becomes_ignored(tmp_path: Path) -> None:
+    tracked = tmp_path / "logs.txt"
+    tracked.write_text("hello", encoding="utf-8")
+
+    store, stats = _build_store()
+    store.rebuild(tmp_path)
+    assert [entry.rel for entry in store.snapshot()] == ["logs.txt"]
+
+    tracked.write_text("hello", encoding="utf-8")
+    (tmp_path / ".gitignore").write_text("*.txt\n", encoding="utf-8")
+    store._ignore_rules.ensure_for_root(tmp_path.resolve())
+    store.apply_changes([(Change.modified, tracked)])
+
+    assert store.snapshot() == ()
+    assert stats.incremental_updates == 1
+
+
+def test_apply_changes_removes_directory_when_it_becomes_ignored(tmp_path: Path) -> None:
+    docs_dir = tmp_path / "docs"
+    docs_dir.mkdir()
+    tracked = docs_dir / "note.md"
+    tracked.write_text("hello", encoding="utf-8")
+
+    store, stats = _build_store()
+    store.rebuild(tmp_path)
+    assert [entry.rel for entry in store.snapshot()] == ["docs", "docs/note.md"]
+
+    (tmp_path / ".gitignore").write_text("docs/\n", encoding="utf-8")
+    store._ignore_rules.ensure_for_root(tmp_path.resolve())
+    store.apply_changes([(Change.modified, docs_dir)])
+
+    assert store.snapshot() == ()
+    assert stats.incremental_updates == 1
