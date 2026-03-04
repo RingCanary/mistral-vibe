@@ -301,6 +301,59 @@ class TestBackend:
                         )
 
     @pytest.mark.asyncio
+    async def test_backend_complete_streaming_sse_parsing_regressions(self) -> None:
+        with respx.mock(base_url="https://api.example.com") as mock_api:
+            stream_bytes = b"\n".join(
+                [
+                    b": keep-alive",
+                    b"",
+                    b'data:{"choices":[{"delta":{"role":"assistant","content":"Hello"}}],"usage":{"prompt_tokens":0,"completion_tokens":0}}',
+                    b"",
+                    b"event: message",
+                    b'data: {"choices":',
+                    b'data: [{"delta": {"content": " world"}}],',
+                    b'data: "usage": {"prompt_tokens": 1, "completion_tokens": 1}}',
+                    b"",
+                    b"data: [DONE]",
+                    b"",
+                ]
+            )
+            mock_api.post("/v1/chat/completions").mock(
+                return_value=httpx.Response(
+                    status_code=200,
+                    stream=httpx.ByteStream(stream=stream_bytes),
+                    headers={"Content-Type": "text/event-stream"},
+                )
+            )
+            provider = ProviderConfig(
+                name="provider_name",
+                api_base="https://api.example.com/v1",
+                api_key_env_var="API_KEY",
+            )
+            backend = GenericBackend(provider=provider)
+            model = ModelConfig(
+                name="model_name", provider="provider_name", alias="model_alias"
+            )
+
+            results: list[LLMChunk] = []
+            async for result in backend.complete_streaming(
+                model=model,
+                messages=[LLMMessage(role=Role.user, content="hello")],
+                temperature=0.2,
+                tools=None,
+                max_tokens=None,
+                tool_choice=None,
+                extra_headers=None,
+            ):
+                results.append(result)
+
+            assert [chunk.message.content for chunk in results] == ["Hello", " world"]
+            assert [
+                (chunk.usage.prompt_tokens, chunk.usage.completion_tokens)
+                for chunk in results
+            ] == [(0, 0), (1, 1)]
+
+    @pytest.mark.asyncio
     @pytest.mark.parametrize(
         "base_url,backend_class,response",
         [

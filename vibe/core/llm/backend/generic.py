@@ -821,6 +821,15 @@ class GenericBackend:
     async def _make_streaming_request(
         self, url: str, data: bytes, headers: dict[str, str]
     ) -> AsyncGenerator[dict[str, Any]]:
+        def decode_data_event(data_lines: list[str]) -> dict[str, Any] | None:
+            if not data_lines:
+                return None
+
+            payload = "\n".join(data_lines).strip()
+            if payload == "[DONE]":
+                return None
+            return json.loads(payload)
+
         client = self._get_client()
         async with client.stream(
             method="POST", url=url, content=data, headers=headers
@@ -828,26 +837,42 @@ class GenericBackend:
             if not response.is_success:
                 await response.aread()
             response.raise_for_status()
+            data_lines: list[str] = []
             async for line in response.aiter_lines():
                 if line.strip() == "":
+                    parsed_data = decode_data_event(data_lines)
+                    if parsed_data is None:
+                        if data_lines and "\n".join(data_lines).strip() == "[DONE]":
+                            return
+                        data_lines.clear()
+                        continue
+
+                    data_lines.clear()
+                    yield parsed_data
+                    continue
+
+                if line.startswith(":"):
                     continue
 
                 DELIM_CHAR = ":"
-                if f"{DELIM_CHAR} " not in line:
+                if DELIM_CHAR not in line:
                     raise ValueError(
                         f"Stream chunk improperly formatted. "
-                        f"Expected `key{DELIM_CHAR} value`, received `{line}`"
+                        f"Expected `key{DELIM_CHAR}value`, received `{line}`"
                     )
-                delim_index = line.find(DELIM_CHAR)
-                key = line[0:delim_index]
-                value = line[delim_index + 2 :]
+                key, value = line.split(DELIM_CHAR, 1)
+                if value.startswith(" "):
+                    value = value[1:]
 
                 if key != "data":
                     # This might be the case with openrouter, so we just ignore it
                     continue
-                if value == "[DONE]":
-                    return
-                yield json.loads(value.strip())
+
+                data_lines.append(value)
+
+            parsed_data = decode_data_event(data_lines)
+            if parsed_data is not None:
+                yield parsed_data
 
     async def count_tokens(
         self,
