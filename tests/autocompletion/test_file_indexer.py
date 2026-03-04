@@ -228,4 +228,4 @@ def test_shutdown_cleans_up_resources(
     file_indexer.get_index(Path("."))
 
     file_indexer.shutdown()
-    assert file_indexer.get_index(Path(".")) == []
+    assert file_indexer.get_index(Path(".")) == ()

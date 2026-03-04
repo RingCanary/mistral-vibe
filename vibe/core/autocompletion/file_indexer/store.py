@@ -35,7 +35,7 @@ class FileIndexStore:
         self._stats = stats
         self._mass_change_threshold = mass_change_threshold
         self._entries_by_rel: dict[str, IndexEntry] = {}
-        self._ordered_entries: list[IndexEntry] | None = None
+        self._ordered_entries: tuple[IndexEntry, ...] | None = None
         self._root: Path | None = None
 
     @property
@@ -54,20 +54,20 @@ class FileIndexStore:
         self._ignore_rules.ensure_for_root(resolved_root)
         entries = self._walk_directory(resolved_root, cancel_check=should_cancel)
         self._entries_by_rel = {entry.rel: entry for entry in entries}
-        self._ordered_entries = entries
+        self._ordered_entries = tuple(sorted(entries, key=lambda entry: entry.rel))
         self._root = resolved_root
         self._stats.rebuilds += 1
 
-    def snapshot(self) -> list[IndexEntry]:
+    def snapshot(self) -> tuple[IndexEntry, ...]:
         if not self._entries_by_rel:
-            return []
+            return ()
 
         if self._ordered_entries is None:
-            self._ordered_entries = sorted(
-                self._entries_by_rel.values(), key=lambda entry: entry.rel
+            self._ordered_entries = tuple(
+                sorted(self._entries_by_rel.values(), key=lambda entry: entry.rel)
             )
 
-        return list(self._ordered_entries)
+        return self._ordered_entries
 
     def apply_changes(self, changes: list[tuple[Change, Path]]) -> None:
         if self._root is None:

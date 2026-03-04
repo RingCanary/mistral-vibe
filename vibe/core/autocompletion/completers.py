@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import NamedTuple
 
@@ -157,7 +157,7 @@ class PathCompleter(Completer):
         return f"@{entry.rel}{suffix}"
 
     def _score_matches(
-        self, entries: list[IndexEntry], context: _SearchContext
+        self, entries: Sequence[IndexEntry], context: _SearchContext
     ) -> list[tuple[str, float]]:
         scored_matches: list[tuple[str, float]] = []
         MAX_MATCHES = 50
