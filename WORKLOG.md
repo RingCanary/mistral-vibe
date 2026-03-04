@@ -60,3 +60,6 @@ Timestamp convention for new entries (henceforth): prefix each task with `[epoch
 - [epoch:1772586801] Fixing FileIndexer.get_index active rebuild cancellation loop safety and adding regression test for root-switch behavior.
 - [epoch:1772586805] Fixing GenericBackend SSE stream parsing for colon variants/comments/multiline events and adding regression tests.
 - [epoch:1772586855] Starting FileIndexStore snapshot immutability optimization: tuple cache migration, call-site updates, and autocompletion tests.
+
+- [epoch:1772591771] Started bug/optimization audit: reproducing tests, scanning for hot paths, and applying targeted fixes with coverage updates.
+- [epoch:1772591835] Implementing file-index incremental ignore handling fixes (ignored dir/file removal) plus regression tests.
