@@ -57,4 +57,5 @@ Timestamp convention for new entries (henceforth): prefix each task with `[epoch
 - [epoch:1771510400] Fixed ChatGPT Codex payload compatibility by omitting `temperature` in `openai-chatgpt-codex` requests, added regression assertions, and reran backend tests + pyright.
 - [epoch:1771511000] User acceptance complete for ChatGPT subscription plane (responses + tool calls); preparing final commit and push for OAuth/backend split work.
 
+- [epoch:1772586801] Fixing FileIndexer.get_index active rebuild cancellation loop safety and adding regression test for root-switch behavior.
 - [epoch:1772586805] Fixing GenericBackend SSE stream parsing for colon variants/comments/multiline events and adding regression tests.
