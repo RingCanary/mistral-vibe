@@ -3,11 +3,13 @@ from __future__ import annotations
 from collections.abc import Callable, Generator
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from threading import Event
 import time
 
 import pytest
 
 from vibe.core.autocompletion.file_indexer import FileIndexer
+from vibe.core.autocompletion.file_indexer.indexer import _RebuildTask
 
 # This suite runs against the real filesystem and watcher. A faked store/watcher
 # split would be faster to unit-test, but given time constraints and the low churn
@@ -191,6 +193,49 @@ def test_switching_between_roots_restarts_index(
             entry.rel == "second.py" for entry in file_indexer.get_index(Path("."))
         )
     )
+
+
+def test_get_index_cancels_other_active_rebuilds_safely_on_root_change(
+    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+    file_indexer: FileIndexer,
+) -> None:
+    first_root = tmp_path
+    second_root = tmp_path_factory.mktemp("second-root")
+
+    monkeypatch.chdir(first_root)
+    file_indexer.get_index(Path("."))
+
+    first_task = _RebuildTask(cancel_event=Event(), done_event=Event())
+    stale_root = tmp_path_factory.mktemp("stale-root").resolve()
+    stale_task = _RebuildTask(cancel_event=Event(), done_event=Event())
+    with file_indexer._rebuild_lock:
+        file_indexer._active_rebuilds[first_root.resolve()] = first_task
+        file_indexer._active_rebuilds[stale_root] = stale_task
+
+    def fake_start_background_rebuild(root: Path) -> None:
+        done_event = Event()
+        done_event.set()
+        with file_indexer._rebuild_lock:
+            file_indexer._active_rebuilds[root] = _RebuildTask(
+                cancel_event=Event(), done_event=done_event
+            )
+
+    monkeypatch.setattr(
+        file_indexer, "_start_background_rebuild", fake_start_background_rebuild
+    )
+
+    monkeypatch.chdir(second_root)
+    file_indexer.get_index(Path("."))
+
+    assert first_task.cancel_event.is_set()
+    assert first_task.done_event.is_set()
+    assert stale_task.cancel_event.is_set()
+    assert stale_task.done_event.is_set()
+    assert first_root.resolve() not in file_indexer._active_rebuilds
+    assert stale_root not in file_indexer._active_rebuilds
+
 
 
 def test_watcher_failure_does_not_break_existing_index(

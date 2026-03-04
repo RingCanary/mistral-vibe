@@ -59,11 +59,17 @@ class FileIndexer:
             self._watcher.stop()
             with self._rebuild_lock:  # cancel rebuilds targeting other roots
                 self._target_root = resolved_root
-                for other_root, task in self._active_rebuilds.items():
-                    if other_root != resolved_root:
-                        task.cancel_event.set()
-                        task.done_event.set()
-                        self._active_rebuilds.pop(other_root, None)
+                roots_to_cancel = [
+                    active_root
+                    for active_root in self._active_rebuilds
+                    if active_root != resolved_root
+                ]
+                for other_root in roots_to_cancel:
+                    task = self._active_rebuilds.pop(other_root, None)
+                    if task is None:
+                        continue
+                    task.cancel_event.set()
+                    task.done_event.set()
 
         with self._lock:
             needs_rebuild = self._store.root != resolved_root
